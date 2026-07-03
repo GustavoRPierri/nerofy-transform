@@ -1,0 +1,88 @@
+name: CI Feature
+
+on:
+  push:
+    branches:
+      - 'feature/**'
+      - 'fix/**'
+      - 'chore/**'
+      - 'refactor/**'
+      - 'docs/**'
+      - 'test/**'
+  pull_request:
+    branches:
+      - develop
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  quality:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install quality tools
+        run: pip install black isort flake8 bandit --quiet
+
+      - name: black
+        run: black --check --line-length 100 src/ lambda_handler.py config/ scripts/
+
+      - name: isort
+        run: isort --check-only --profile black src/ lambda_handler.py config/ scripts/
+
+      - name: flake8
+        run: |
+          flake8 src/ lambda_handler.py config/ \
+            --max-line-length=100 \
+            --extend-ignore=E203,W503
+
+      - name: bandit
+        run: bandit -r src/ lambda_handler.py -ll --quiet
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest pytest-asyncio --quiet
+
+      - name: Run unit tests
+        run: pytest src/tests/ --ignore=src/tests/integration -v
+
+  create-pr:
+    name: Create PR
+    runs-on: ubuntu-latest
+    needs: [quality, unit-tests]
+    # Só cria PR quando disparado por push (não em PR checks)
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Criar PR para develop
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          BRANCH="${{ github.ref_name }}"
+          EXISTING=$(gh pr list --base develop --head "$BRANCH" --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            echo "PR #$EXISTING já existe para $BRANCH → develop. Pulando."
+            exit 0
+          fi
+          TITLE=$(git log -1 --pretty=%s)
+          gh pr create \
+            --base develop \
+            --head "$BRANCH" \
+            --title "$TITLE" \
+            --body "PR automático criado pelo CI após testes passarem na branch \`$BRANCH\`."

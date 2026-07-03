@@ -1,0 +1,107 @@
+name: Deploy to AWS
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  AWS_REGION: sa-east-1
+  TF_VERSION: "1.7.5"
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  deploy:
+    name: Build & Deploy Lambda
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_DEPLOY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # ── Build Lambda Layer ──────────────────────────────────────────────────
+      # Instala as dependências em layer/python/ e compacta.
+      # O diretório "python/" é obrigatório para que o Lambda encontre os pacotes.
+      - name: Build Lambda Layer
+        run: |
+          mkdir -p layer/python
+          pip install -r requirements.txt -t layer/python --upgrade --quiet
+          cd layer && zip -r ../lambda_layer.zip python/ --quiet
+          echo "Layer size: $(du -sh ../lambda_layer.zip | cut -f1)"
+
+      # ── Build Lambda package ────────────────────────────────────────────────
+      # Empacota apenas o código-fonte, excluindo artefatos de build e dev.
+      - name: Build Lambda package
+        run: |
+          zip -r lambda_function.zip . \
+            -x "*.git*" \
+            -x ".venv/*" \
+            -x "local_output/*" \
+            -x "infra/*" \
+            -x ".github/*" \
+            -x "*.pyc" \
+            -x "*/__pycache__/*" \
+            -x "layer/*" \
+            -x "lambda_layer.zip" \
+            -x "lambda_function.zip" \
+            -x "*.egg-info/*" \
+            --quiet
+          echo "Package size: $(du -sh lambda_function.zip | cut -f1)"
+
+      # ── Terraform ──────────────────────────────────────────────────────────
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        working-directory: infra
+        run: terraform init
+
+      - name: Terraform Validate
+        working-directory: infra
+        run: terraform validate
+
+      - name: Terraform Plan
+        working-directory: infra
+        run: terraform plan -out=tfplan -input=false
+
+      - name: Terraform Apply
+        working-directory: infra
+        run: terraform apply -auto-approve -input=false tfplan
+
+      # ── Integration Tests ──────────────────────────────────────────────────
+      - name: Exportar outputs do Terraform
+        id: tf
+        working-directory: infra
+        run: |
+          echo "lambda_name=$(terraform output -raw lambda_function_name)" >> "$GITHUB_OUTPUT"
+          echo "s3_bucket=$(terraform output -raw s3_silver_bucket)" >> "$GITHUB_OUTPUT"
+          echo "s3_bronze_bucket=$(terraform output -raw s3_bronze_bucket)" >> "$GITHUB_OUTPUT"
+          echo "glue_database=$(terraform output -raw glue_database)" >> "$GITHUB_OUTPUT"
+
+      - name: Instalar dependências de teste
+        run: pip install -r requirements.txt pytest pytest-asyncio boto3 --quiet
+
+      - name: Integration Tests
+        run: |
+          pytest src/tests/integration/ -v
+        env:
+          TEST_LAMBDA_NAME: ${{ steps.tf.outputs.lambda_name }}
+          TEST_S3_BRONZE_BUCKET: ${{ steps.tf.outputs.s3_bronze_bucket }}
+          TEST_S3_SILVER_BUCKET: ${{ steps.tf.outputs.s3_bucket }}
+          TEST_GLUE_DATABASE: ${{ steps.tf.outputs.glue_database }}

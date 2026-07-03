@@ -1,0 +1,35 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: nerofy-transform — Lambda de transformacao JSON -> Parquet + Glue Catalog
+
+Globals:
+  Function:
+    Timeout: 120
+    MemorySize: 512
+    Runtime: python3.12
+    Architectures:
+      - x86_64
+
+Resources:
+  TransformFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: nerofy-transform
+      Handler: lambda_handler.lambda_handler
+      CodeUri: .
+      Description: Converte JSON da camada bronze para Parquet na silver e registra no Glue Catalog
+      Environment:
+        Variables:
+          AWS_REGION: sa-east-1
+          S3_BRONZE_BUCKET: nerofy-bronze-dev
+          S3_SILVER_BUCKET: nerofy-silver-dev
+          GLUE_DATABASE: nerofy
+          LOG_LEVEL: INFO
+          ENV: dev
+      Policies:
+        - S3ReadPolicy:
+            BucketName: nerofy-bronze-dev
+        - S3WritePolicy:
+            BucketName: nerofy-silver-dev
+        - GlueTableReadWritePolicy:
+            TableName: nerofy

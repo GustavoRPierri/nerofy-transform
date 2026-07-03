@@ -1,0 +1,17 @@
+{
+  "Records": [
+    {
+      "eventVersion": "2.1",
+      "eventSource": "aws:s3",
+      "s3": {
+        "s3SchemaVersion": "1.0",
+        "bucket": {
+          "name": "nerofy-bronze-dev"
+        },
+        "object": {
+          "key": "bronze/items/item-abc123/year=2026/month=07/day=03/item_evt-001.json"
+        }
+      }
+    }
+  ]
+}
